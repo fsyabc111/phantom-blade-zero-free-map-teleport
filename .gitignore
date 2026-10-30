@@ -1,0 +1,10 @@
+# Local development and game data
+research/
+backups/
+stage/
+tools/python/
+*.sav
+*.log
+__pycache__/
+.env
+.env.*

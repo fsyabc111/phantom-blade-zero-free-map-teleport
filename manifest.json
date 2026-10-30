@@ -1,0 +1,12 @@
+{
+  "name": "FreeMapTeleport",
+  "version": "1.0.1",
+  "steam_appid": "4115450",
+  "supported_buildid": "26266538",
+  "files": {
+    "ProjectPBZ-FreeMapTeleport_999_P.pak": "4b1bda3b217ea0db492c0d529b3710337807d8395db983f8c01a94238f53bc34",
+    "ProjectPBZ-FreeMapTeleport_999_P.utoc": "dbcb2e83c11648950c7d92f98eb7e044f788a7d52aead22ab9e360a310a04d7a",
+    "ProjectPBZ-FreeMapTeleport_999_P.ucas": "92ebed6ff99d2b5e2b56bb91f410751c42e50ba9f26395a15e601e9b812ed0ab"
+  },
+  "validation": "Modified script loaded and direct map teleport confirmed; cross-region and post-teleport save loading not separately confirmed."
+}

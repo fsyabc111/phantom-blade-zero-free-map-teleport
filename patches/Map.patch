@@ -1,0 +1,157 @@
+--- original/UI/Widget/Map.js
++++ FreeMapTeleport/UI/Widget/Map.js
+@@ -8049,6 +8049,7 @@
+         routerCompat.SetMenuCursorAutoHideSuppressed(suppressed);
+     }
+     BP_InitWidget() {
++        this._freeMapTeleportInFlight = false;
+         this.systemMenuExitPending = false;
+         this.PrepareMapPageExit();
+         this.setMapPageBlackMaskOpacity(1);
+@@ -9205,6 +9206,8 @@
+     // 传送符流程入口：跑 gate 链 → 双确认 → 扣 1 个 Item_Traversing → 调 PerformanceSystemSubsystem.TeleportToTargetPoint。
+     // 仅在非 IsOpenByBell()（普通地图模式）下被 readyToTeleport 调用。
+     tryTeleportByCharm(targetBellID) {
++        if (this._freeMapTeleportInFlight)
++            return;
+         // 点中铃铛即播点击动画（点击反馈，与能否传送/有无传送符无关）。
+         // as any：BP_OnClicked 是 W_BellSlot 蓝图新增事件，PuerTS typing 未重生成。
+         let bellSlotData = this.focusItemMap.get(targetBellID.toLocaleLowerCase());
+@@ -9217,17 +9220,7 @@
+     }
+     // Gate 链。命中任一 gate 即弹提示并返回 false。顺序与 docs/source/teleport-charm-system.md §4 表格一致。
+     runTeleportGates(targetBellID) {
+-        // gate 1：先判断穿行符数量。身上没有穿行符直接拦，后面的状态/位置检查都不跑（避免"没符却先报战斗中/附近有铃铛"等误导）。
+-        let backpack = UE.PBZBackPackSubsystem.GetBackPackSubsytemByContextObject(this);
+-        if (!backpack)
+-            return false;
+-        let ownedRef = (0, puerts_1.$ref)(0);
+-        let maxRef = (0, puerts_1.$ref)(0);
+-        backpack.GetItemNumInfo(TeleportCharmConfig.ItemID, ownedRef, maxRef);
+-        if ((0, puerts_1.$unref)(ownedRef) <= 0) {
+-            this.showTeleportTip("UI_Map_37");
+-            return false;
+-        }
++        // FreeMapTeleport: no inventory requirement.
+         let character = UE.PBZBlueprintFunctionLibrary.GetPBZLocalCharacter(this);
+         if (!character)
+             return false;
+@@ -9288,25 +9281,7 @@
+         }
+         // 附近铃铛检查：Rule #1 先物化 BellID 列表，避免循环内 GetSaveActorByID 触发 GC 时跨边界持 FName
+         let gameSystem = TsHelper_1.default.getWorldSubsystem(this, UE.PBZGameSystem.StaticClass());
+-        if (gameSystem) {
+-            let activeBellIDs = bellManager.ActivateBellIDs;
+-            let bellNum = activeBellIDs.Num();
+-            let bellIDList = [];
+-            for (let i = 0; i < bellNum; i++) {
+-                if (activeBellIDs.IsValidIndex(i))
+-                    bellIDList.push(activeBellIDs.Get(i).toString());
+-            }
+-            for (const bellID of bellIDList) {
+-                let bellActor = gameSystem.GetSaveActorByID(bellID);
+-                if (!bellActor)
+-                    continue;
+-                let bellLoc = bellActor.K2_GetActorLocation();
+-                if (playerLoc.op_Subtraction(bellLoc).Size() <= TeleportCharmConfig.NearbyBellRadius) {
+-                    this.showTeleportTip("UI_Map_36");
+-                    return false;
+-                }
+-            }
+-        }
++        // FreeMapTeleport: the normal map also works beside a bell.
+         // gate 10：解析目标铃铛所属 mapID（供下面白名单 / 剧情锁使用）。
+         //   跨大区限制已取消：穿行符可传到任意大区的已激活铃铛（跨图由 doCharmTeleport
+         //   查 DT_MapData[targetMapID].LevelName 后交给 TeleportToTargetPoint 的跨图分支处理）。
+@@ -9397,48 +9372,23 @@
+     // 双确认（gate 链 outer + 此处 inner）：inner 弹 W_Confirmation（PBZItemCostDialogDescriptor 触发 subsystem 分发），点 Confirmed 才扣道具 + 传送。
+     // 弹窗期间道具可能被其它流程消耗（如喝药），Confirmed 后重查一次余量再扣。
+     confirmAndConsumeCharm(targetBellID) {
+-        let backpack = UE.PBZBackPackSubsystem.GetBackPackSubsytemByContextObject(this);
+-        if (!backpack)
+-            return;
+-        let ownedRef = (0, puerts_1.$ref)(0);
+-        let maxRef = (0, puerts_1.$ref)(0);
+-        backpack.GetItemNumInfo(TeleportCharmConfig.ItemID, ownedRef, maxRef);
+-        let owned = (0, puerts_1.$unref)(ownedRef);
+-        // 道具显示名：GetPropData → FPBZItemDataStruct.ItemName(FFlowLocText) → .Key → MakeTextByKey
+-        // DT_Inventory 必须配 Item_Traversing 的 ItemName，否则缺本地化文案，宁可不弹也不要显示英文 ID
+-        let propData = UE.PBZBackPackSubsystem.GetPropData(TeleportCharmConfig.ItemID);
+-        let itemNameKey = propData && propData.ItemName ? propData.ItemName.Key : "";
+-        if (!itemNameKey) {
+-            if (UILog_1.UILog.enabled)
+-                console.warn(`[TeleportCharm] DT_Inventory 缺 ${TeleportCharmConfig.ItemID} 的 ItemName.Key 配置，取消传送`);
+-            return;
+-        }
+-        let itemNameText = UE.PBZBlueprintFunctionLibrary.MakeTextByKey(itemNameKey);
+-        // cpp.FText.Format 在 PuerTS 反射里直接接受 number 占位（参考 UIHelper.ts:518 的 targetLevel）
+-        let template = UIHelper_1.default.GetTextByID("UI_Map_32");
+-        let confirmText = cpp_1.FText.Format(template, owned, itemNameText);
+-        // bDisplayCount=false：UI_Map_32 body 已含 "1/N" 文字，再开数量行会重复；W_Confirmation 仍会按 ItemID 显示图标
+-        let descriptor = UE.PBZItemCostDialogDescriptor.CreateItemCostConfirmationYesNo(this, undefined, confirmText, false, TeleportCharmConfig.ItemID, 1);
+-        let asyncAction = UE.AsyncAction_ShowConfirmation.ShowConfirmationCustom(this, descriptor);
+-        asyncAction.OnResult.Add((result) => {
+-            if (result !== UE.ECommonMessagingResult.Confirmed)
+-                return;
+-            // 弹窗期间道具可能被其它流程消耗（如喝药），确认通过后重查一次余量
+-            let recheckRef = (0, puerts_1.$ref)(0);
+-            backpack.GetItemNumInfo(TeleportCharmConfig.ItemID, recheckRef, maxRef);
+-            if ((0, puerts_1.$unref)(recheckRef) <= 0) {
+-                this.showTeleportTip("UI_Map_37");
+-                return;
+-            }
+-            // 弹窗期间可能有 flow 分支开跑：扣符前再判一次关键段，命中则不扣符
+-            if (this.isTeleportBlockedByFlowCriticalSection(FlowCriticalSectionSource.Charm, true)) {
+-                this.showTeleportTip("UI_Map_39");
+-                return;
+-            }
+-            backpack.RemovePropsFromBackPack(1, TeleportCharmConfig.ItemID, true);
+-            this.doCharmTeleport(targetBellID);
+-        });
+-        asyncAction.Activate();
++        // FreeMapTeleport 1.0.1, Steam build 26266538.
++        // Keep the final flow recheck; open no item dialog and consume no item.
++        if (this._freeMapTeleportInFlight)
++            return;
++        if (this.isTeleportBlockedByFlowCriticalSection(FlowCriticalSectionSource.Charm, true)) {
++            this.showTeleportTip("UI_Map_39");
++            return;
++        }
++        this._freeMapTeleportInFlight = true;
++        try {
++            if (this.doCharmTeleport(targetBellID) === false)
++                this._freeMapTeleportInFlight = false;
++        }
++        catch (error) {
++            this._freeMapTeleportInFlight = false;
++            throw error;
++        }
+     }
+     // 直调 PerformanceSystemSubsystem.TeleportToTargetPoint。
+     // 不能复用 BellTeleport.Broadcast：传送符场景下 W_TeleportMap_C 没实例化，没有 listener。
+@@ -9448,7 +9398,7 @@
+         if (!bellData) {
+             if (UILog_1.UILog.enabled)
+                 console.warn(`[TeleportCharm] doCharmTeleport: GetBellData(${targetBellID}) 返回 null`);
+-            return;
++            return false;
+         }
+         // 行船中：先强制下船（detach + 销毁 boat + 清 ShipNavigation tag），再传送
+         let character = UE.PBZBlueprintFunctionLibrary.GetPBZLocalCharacter(this);
+@@ -9500,7 +9450,7 @@
+         if (!perfSubsystem) {
+             if (UILog_1.UILog.enabled)
+                 console.warn(`[TeleportCharm] 拿不到 PerformanceSystemSubsystem`);
+-            return;
++            return false;
+         }
+         let loc = targetTransform.GetLocation();
+         if (UILog_1.UILog.enabled)
+@@ -9527,6 +9477,7 @@
+         // 关闭外层 W_TeleportMap：W_MapNew 自己 broadcast PopScreenWidgetDelegate，TeleportMap.ts:27 监听后 DeactivateWidget
+         // 注意：传送符路径下 W_TeleportMap_C 没实例化，PopScreenWidgetDelegate 没监听者；UI 关闭依赖 LoadingScreen 接管显示
+         this.PopScreenWidgetDelegate.Broadcast();
++        return true;
+     }
+     ClickButtonDown() {
+         this.lastMousePosition = this.getMouseLocalPosition();
